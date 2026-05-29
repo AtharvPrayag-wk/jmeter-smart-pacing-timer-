@@ -7,6 +7,14 @@ package com.github.tharvprayag.jmeter.pacing;
  * Pacing Formula:
  *   Basic:    pacing_ms = (vUsers / targetTPS) * 1000
  *   Adjusted: pacing_ms = max(0, (vUsers / targetTPS) * 1000 - avgResponseTime - thinkTime)
+ *
+ * Load Multiplier:
+ *   effectiveRate = baseThroughput * multiplier
+ *   totalTransactions = effectiveRate * (durationMinutes / 60)
+ *
+ * Suggested Users:
+ *   idealUsers = ceil(effectiveTPS * iterationTime_seconds)
+ *   where iterationTime = avgResponseTime + thinkTime + minPacingBuffer
  */
 public class PacingCalculator {
 
@@ -19,7 +27,7 @@ public class PacingCalculator {
     /**
      * Calculate the required pacing delay in milliseconds.
      *
-     * @param targetThroughput The desired throughput value
+     * @param targetThroughput The desired throughput value (already multiplied if using load multiplier)
      * @param unit             The unit of throughput (TPS, TPM, TPH)
      * @param numberOfUsers    Number of virtual users (threads)
      * @param avgResponseTimeMs Average response time in milliseconds (0 if unknown)
@@ -40,11 +48,12 @@ public class PacingCalculator {
         // Convert everything to TPS
         double targetTPS = convertToTPS(targetThroughput, unit);
 
-        // Core formula: Pacing = (Users / TPS) * 1000 ms
-        double rawPacingMs = (numberOfUsers / targetTPS) * 1000.0;
+        // Core formula: Iteration Interval = (Users / TPS) * 1000 ms
+        // Pacing = Iteration Interval - Response Time - Think Time
+        double iterationIntervalMs = (numberOfUsers / targetTPS) * 1000.0;
 
-        // Subtract response time and think time (pacing includes iteration time)
-        double adjustedPacingMs = rawPacingMs - avgResponseTimeMs - thinkTimeMs;
+        // Subtract response time and think time (pacing is the WAIT portion of the iteration)
+        double adjustedPacingMs = iterationIntervalMs - avgResponseTimeMs - thinkTimeMs;
 
         // Never return negative pacing
         return Math.max(0, Math.round(adjustedPacingMs));
@@ -52,11 +61,99 @@ public class PacingCalculator {
 
     /**
      * Calculate pacing without response time/think time adjustment.
-     * Useful when you want to set a fixed iteration interval.
      */
     public static long calculateBasicPacing(double targetThroughput, ThroughputUnit unit,
                                             int numberOfUsers) {
         return calculatePacing(targetThroughput, unit, numberOfUsers, 0, 0);
+    }
+
+    /**
+     * Apply load multiplier to base throughput.
+     * e.g., baseThroughput=120 TPH, multiplier=2.0 → effectiveRate=240 TPH
+     */
+    public static double applyMultiplier(double baseThroughput, double multiplier) {
+        if (multiplier <= 0) {
+            throw new IllegalArgumentException("Load multiplier must be greater than 0");
+        }
+        return baseThroughput * multiplier;
+    }
+
+    /**
+     * Calculate total transactions expected during steady state.
+     *
+     * @param effectiveThroughput The effective rate (base × multiplier)
+     * @param unit                Throughput unit
+     * @param steadyStateDurationMinutes Duration of steady state in minutes
+     * @return Total number of transactions expected
+     */
+    public static long calculateTotalTransactions(double effectiveThroughput, ThroughputUnit unit,
+                                                  double steadyStateDurationMinutes) {
+        if (steadyStateDurationMinutes <= 0) {
+            throw new IllegalArgumentException("Duration must be greater than 0");
+        }
+        double tps = convertToTPS(effectiveThroughput, unit);
+        double totalSeconds = steadyStateDurationMinutes * 60.0;
+        return Math.round(tps * totalSeconds);
+    }
+
+    /**
+     * Calculate the ideal (suggested) number of users to achieve target throughput.
+     *
+     * Formula: Users = ceil(TPS × iteration_time_seconds)
+     * Where iteration_time = avgResponseTime + thinkTime + minPacingBuffer
+     * The minPacingBuffer ensures there's always some pacing (we use 20% of iteration time as buffer).
+     *
+     * @param targetThroughput Effective throughput target
+     * @param unit             Throughput unit
+     * @param avgResponseTimeMs Average response time in ms
+     * @param thinkTimeMs      Think time in ms
+     * @return Suggested number of users (rounded up)
+     */
+    public static int calculateSuggestedUsers(double targetThroughput, ThroughputUnit unit,
+                                              long avgResponseTimeMs, long thinkTimeMs) {
+        if (targetThroughput <= 0) {
+            throw new IllegalArgumentException("Target throughput must be greater than 0");
+        }
+
+        double targetTPS = convertToTPS(targetThroughput, unit);
+
+        // Iteration "busy" time = response time + think time
+        double busyTimeMs = avgResponseTimeMs + thinkTimeMs;
+
+        // Add 20% buffer to ensure comfortable pacing (not running at 100% capacity)
+        // Minimum buffer is 1 second to avoid zero-pacing situations
+        double bufferMs = Math.max(1000, busyTimeMs * 0.2);
+        double totalIterationTimeMs = busyTimeMs + bufferMs;
+
+        // Users needed = TPS × iteration_time_in_seconds
+        double users = targetTPS * (totalIterationTimeMs / 1000.0);
+
+        // At minimum 1 user
+        return Math.max(1, (int) Math.ceil(users));
+    }
+
+    /**
+     * Calculate iterations per user during steady state.
+     *
+     * @param steadyStateDurationMinutes Duration in minutes
+     * @param pacingMs                   Calculated pacing in ms
+     * @param avgResponseTimeMs          Average response time in ms
+     * @param thinkTimeMs                Think time in ms
+     * @return Approximate number of iterations each user will perform
+     */
+    public static long calculateIterationsPerUser(double steadyStateDurationMinutes,
+                                                  long pacingMs, long avgResponseTimeMs,
+                                                  long thinkTimeMs) {
+        if (steadyStateDurationMinutes <= 0) {
+            return 0;
+        }
+        // Total iteration time = pacing + response time + think time
+        long iterationTimeMs = pacingMs + avgResponseTimeMs + thinkTimeMs;
+        if (iterationTimeMs <= 0) {
+            return 0;
+        }
+        double totalMs = steadyStateDurationMinutes * 60.0 * 1000.0;
+        return (long) (totalMs / iterationTimeMs);
     }
 
     /**
