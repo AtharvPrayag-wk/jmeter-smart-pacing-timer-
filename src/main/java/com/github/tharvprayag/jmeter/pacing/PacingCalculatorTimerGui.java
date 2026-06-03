@@ -90,7 +90,10 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
         bottomRow.add(createTimingPanel());
         inputPanel.add(bottomRow);
 
-        // Row 3: Adaptive Pacing
+        // Row 3: Pacing Jitter
+        inputPanel.add(createPacingJitterPanel());
+
+        // Row 4: Adaptive Pacing
         inputPanel.add(createAdaptivePanel());
 
         return inputPanel;
@@ -141,13 +144,14 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
         steadyStateDurationField.setToolTipText("Duration of steady state in minutes");
         panel.add(steadyStateDurationField, gbc);
 
-        // Ramp-up
+        // Ramp-up (display-only)
         gbc.gridx = 0; gbc.gridy = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Ramp-up (min):"), gbc);
+        panel.add(new JLabel("Ramp-up (min) — display only:"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         rampUpTimeField = new JTextField(6);
         rampUpTimeField.setText("5");
-        rampUpTimeField.setToolTipText("Ramp-up time in minutes (informational, does not affect pacing calculation)");
+        rampUpTimeField.setToolTipText("For reference only — configure actual ramp-up in Thread Group. Does not affect pacing calculation.");
+        rampUpTimeField.setForeground(new Color(120, 120, 120));
         panel.add(rampUpTimeField, gbc);
 
         return panel;
@@ -218,11 +222,11 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
 
         // Average Response Time (1 user 1 iteration)
         gbc.gridx = 0; gbc.gridy = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Avg Response Time - 1 user 1 iteration (ms):"), gbc);
+        panel.add(new JLabel("Total Response Time per iteration (ms):"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         avgResponseTimeField = new JTextField(8);
         avgResponseTimeField.setText("0");
-        avgResponseTimeField.setToolTipText("Average response time for 1 user completing 1 full iteration (all requests combined) in ms");
+        avgResponseTimeField.setToolTipText("Sum of all request response times in one full script iteration (all samplers combined) for 1 user, in ms");
         panel.add(avgResponseTimeField, gbc);
 
         // Total Think Time
@@ -234,17 +238,8 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
         thinkTimeField.setToolTipText("Total think time within 1 iteration (sum of all think times in the script) in ms");
         panel.add(thinkTimeField, gbc);
 
-        // Randomization
-        gbc.gridx = 0; gbc.gridy = 4; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Randomization (%):"), gbc);
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        randomizationField = new JTextField(8);
-        randomizationField.setText("0");
-        randomizationField.setToolTipText("Adds random variance to pacing (e.g., 10 = pacing varies +-10%). Prevents all users hitting server at same instant.");
-        panel.add(randomizationField, gbc);
-
         // Skip first iteration
-        gbc.gridx = 0; gbc.gridy = 5; gbc.gridwidth = 2;
+        gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 2;
         gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
         skipFirstIterationCheckbox = new JCheckBox("Skip pacing on first iteration (all users start immediately)");
         skipFirstIterationCheckbox.setSelected(false);
@@ -264,6 +259,32 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
         endToEndResponseTimeField.setEnabled(useE2E);
         avgResponseTimeField.setEnabled(!useE2E);
         thinkTimeField.setEnabled(!useE2E);
+    }
+
+    private JPanel createPacingJitterPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Pacing Jitter"));
+        GridBagConstraints gbc = createGbc();
+
+        gbc.gridx = 0; gbc.gridy = 0;
+        gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        panel.add(new JLabel("Randomization (%):"), gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 0.3;
+        randomizationField = new JTextField(6);
+        randomizationField.setText("0");
+        randomizationField.setToolTipText(
+                "Adds random variance to pacing (e.g., 10 = pacing varies \u00b110%). " +
+                "Prevents all users hitting the server at the same instant. 0 = no jitter.");
+        panel.add(randomizationField, gbc);
+
+        // Inline explanation
+        gbc.gridx = 2; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 0.7;
+        JLabel jitterHelp = new JLabel("  \u2190 Spreads user requests over time to avoid thundering herd");
+        jitterHelp.setFont(jitterHelp.getFont().deriveFont(Font.ITALIC, 11f));
+        jitterHelp.setForeground(new Color(100, 100, 100));
+        panel.add(jitterHelp, gbc);
+
+        return panel;
     }
 
     private JPanel createAdaptivePanel() {
@@ -290,25 +311,50 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
         });
         panel.add(adaptiveModeCheckbox, gbc);
 
-        // Window
-        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1;
+        // Inline help text
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 4;
+        JLabel adaptiveHelpLabel = new JLabel(
+                "<html><i>Adjusts pacing in real-time to hit target TPS. Use when response times vary unpredictably. Leave off for stable systems.</i></html>");
+        adaptiveHelpLabel.setFont(adaptiveHelpLabel.getFont().deriveFont(Font.ITALIC, 11f));
+        adaptiveHelpLabel.setForeground(new Color(100, 100, 100));
+        panel.add(adaptiveHelpLabel, gbc);
+
+        // Throughput Measurement Window
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1;
         gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Monitoring Window (sec):"), gbc);
+        panel.add(new JLabel("Throughput Measurement Window (sec):"), gbc);
         gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 0.5;
         adaptiveWindowField = new JTextField(5);
         adaptiveWindowField.setText("10");
         adaptiveWindowField.setEnabled(false);
-        adaptiveWindowField.setToolTipText("Time window (seconds) to measure actual throughput. Larger = smoother but slower to react.");
+        adaptiveWindowField.setToolTipText(
+                "How many seconds of recent throughput data to consider when adjusting. " +
+                "Short (5s) = reacts quickly to spikes. Long (30s) = ignores transient fluctuations. Min: 1");
+        adaptiveWindowField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateWindowField();
+            }
+        });
         panel.add(adaptiveWindowField, gbc);
 
-        // Dampening
+        // Correction Strength (was Dampening)
         gbc.gridx = 2; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        panel.add(new JLabel("Dampening (0.1-1.0):"), gbc);
+        panel.add(new JLabel("Correction Strength (0.1-1.0):"), gbc);
         gbc.gridx = 3; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 0.5;
         adaptiveDampeningField = new JTextField(5);
         adaptiveDampeningField.setText("0.3");
         adaptiveDampeningField.setEnabled(false);
-        adaptiveDampeningField.setToolTipText("How aggressively to adjust. 0.1 = gentle, 1.0 = aggressive. Recommended: 0.3");
+        adaptiveDampeningField.setToolTipText(
+                "Controls how much pacing changes per adjustment cycle. " +
+                "0.1 = gentle/stable (less oscillation). 1.0 = aggressive/fast (may overshoot). " +
+                "Recommended: 0.3");
+        adaptiveDampeningField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                validateDampeningField();
+            }
+        });
         panel.add(adaptiveDampeningField, gbc);
 
         return panel;
@@ -674,6 +720,65 @@ public class PacingCalculatorTimerGui extends AbstractTimerGui {
             return text.isEmpty() ? defaultVal : Long.parseLong(text);
         } catch (NumberFormatException e) {
             return defaultVal;
+        }
+    }
+
+    // --- Field Validation ---
+
+    private static final Color VALID_BG = UIManager.getColor("TextField.background");
+    private static final Color INVALID_BG = new Color(255, 230, 230);
+
+    private void validateDampeningField() {
+        String text = adaptiveDampeningField.getText().trim();
+        if (text.isEmpty() || text.contains("${")) {
+            adaptiveDampeningField.setBackground(VALID_BG);
+            return;
+        }
+        try {
+            double val = Double.parseDouble(text);
+            if (val < 0.1 || val > 1.0) {
+                adaptiveDampeningField.setBackground(INVALID_BG);
+                adaptiveDampeningField.setToolTipText(
+                        "WARNING: Value should be between 0.1 and 1.0. " +
+                        "Current value may cause oscillation (>1.0) or have no effect (<0.1).");
+            } else {
+                adaptiveDampeningField.setBackground(VALID_BG);
+                adaptiveDampeningField.setToolTipText(
+                        "Controls how much pacing changes per adjustment cycle. " +
+                        "0.1 = gentle/stable (less oscillation). 1.0 = aggressive/fast (may overshoot). " +
+                        "Recommended: 0.3");
+            }
+        } catch (NumberFormatException e) {
+            adaptiveDampeningField.setBackground(INVALID_BG);
+            adaptiveDampeningField.setToolTipText("Invalid number. Enter a value between 0.1 and 1.0.");
+        }
+    }
+
+    private void validateWindowField() {
+        String text = adaptiveWindowField.getText().trim();
+        if (text.isEmpty() || text.contains("${")) {
+            adaptiveWindowField.setBackground(VALID_BG);
+            return;
+        }
+        try {
+            int val = Integer.parseInt(text);
+            if (val < 1) {
+                adaptiveWindowField.setBackground(INVALID_BG);
+                adaptiveWindowField.setToolTipText("WARNING: Window must be at least 1 second.");
+            } else if (val < 5) {
+                adaptiveWindowField.setBackground(new Color(255, 248, 220)); // light yellow warning
+                adaptiveWindowField.setToolTipText(
+                        "CAUTION: Window below 5s can produce noisy measurements. " +
+                        "Consider 5-30s for stable results.");
+            } else {
+                adaptiveWindowField.setBackground(VALID_BG);
+                adaptiveWindowField.setToolTipText(
+                        "How many seconds of recent throughput data to consider when adjusting. " +
+                        "Short (5s) = reacts quickly to spikes. Long (30s) = ignores transient fluctuations. Min: 1");
+            }
+        } catch (NumberFormatException e) {
+            adaptiveWindowField.setBackground(INVALID_BG);
+            adaptiveWindowField.setToolTipText("Invalid number. Enter a whole number of seconds (e.g., 10).");
         }
     }
 }

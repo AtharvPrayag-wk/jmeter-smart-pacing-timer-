@@ -64,7 +64,7 @@ public class AdaptivePacingController {
      * @return Actual transactions per second in the window
      */
     public double getActualTPS(int windowSeconds) {
-        if (windowSeconds <= 0) {
+        if (windowSeconds < 1) {
             windowSeconds = 10;
         }
 
@@ -108,6 +108,9 @@ public class AdaptivePacingController {
         if (actualTPS <= 0 || totalCompletions.get() < 3) {
             return basePacing;
         }
+
+        // Clamp dampening to safe range to prevent oscillation or inversion
+        dampening = Math.max(0.1, Math.min(1.0, dampening));
 
         // Proportional error: positive = too fast, negative = too slow
         double error = (actualTPS - targetTPS) / targetTPS;
